@@ -42,11 +42,22 @@ def parse_bunker_tables(html_content: str, section_name: str, crawl_timestamp: d
 
         header_cells = rows[0].find_all(["th", "td"])
         expanded_headers = []
+        header_text_parts = []
         for cell in header_cells:
             colspan = int(cell.get("colspan", 1))
-            expanded_headers.extend([cell.get_text(strip=True)] * colspan)
+            text = cell.get_text(strip=True)
+            header_text_parts.extend([text] * colspan)
+            # Only the first column of a spanned header (e.g. "VLSFO" over a
+            # $/mt + +/- sub-column pair) carries the fuel-grade label — the
+            # remaining spanned columns are that same header's own sub-columns
+            # (typically a change-delta), not a second port price. Mapping all
+            # of them to the same grade let a delta value overwrite the real
+            # price in the later port+grade dedup (e.g. Singapore LSMGO
+            # resolving to its $99.50 daily change instead of $1,375.00).
+            expanded_headers.append(text)
+            expanded_headers.extend([""] * (colspan - 1))
 
-        header_text_joined = " ".join(expanded_headers).upper()
+        header_text_joined = " ".join(header_text_parts).upper()
         if "HIGH" in header_text_joined and "LOW" in header_text_joined and "PRICE $/MT" in header_text_joined:
             continue
 
