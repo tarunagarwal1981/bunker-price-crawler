@@ -31,9 +31,8 @@ def detect_fuel_grade(header_text: str) -> Optional[str]:
 
 EXCLUDED_PORT_TERMS = {"eua", "eu ets", "brent", "wti", "crude", "global", "market", "index", "average", "port", "region"}
 
-def parse_bunker_tables(html_content: str, section_name: str) -> List[Dict]:
+def parse_bunker_tables(html_content: str, section_name: str, crawl_timestamp: datetime) -> List[Dict]:
     soup = BeautifulSoup(html_content, "html.parser")
-    crawl_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     records = []
 
     for table in soup.find_all("table"):
@@ -98,7 +97,7 @@ def parse_bunker_tables(html_content: str, section_name: str) -> List[Dict]:
 
                 if spot_price is not None and spot_price > 50:
                     records.append({
-                        "crawl_date": crawl_date,
+                        "crawl_timestamp": crawl_timestamp,
                         "section": section_name,
                         "port": port_name,
                         "fuel_grade": grade,
@@ -111,6 +110,7 @@ def parse_bunker_tables(html_content: str, section_name: str) -> List[Dict]:
 BASE_URL = "https://shipandbunker.com"
 
 def fetch_all_data() -> List[Dict]:
+    crawl_timestamp = datetime.now(timezone.utc)
     endpoints = {
         "Global Benchmark": f"{BASE_URL}/prices",
         "Americas": f"{BASE_URL}/prices/am",
@@ -122,7 +122,7 @@ def fetch_all_data() -> List[Dict]:
         try:
             resp = requests.get(url, impersonate="chrome120", timeout=20)
             if resp.status_code == 200:
-                all_records.extend(parse_bunker_tables(resp.text, name))
+                all_records.extend(parse_bunker_tables(resp.text, name, crawl_timestamp))
         except Exception as e:
             print(f"Error fetching {name}: {e}")
         time.sleep(1.0)
@@ -138,9 +138,9 @@ def upsert_to_postgres(records: List[Dict]):
         raise ValueError("DATABASE_URL environment variable is not set.")
 
     query = """
-    INSERT INTO bunker_prices (crawl_date, section, port, fuel_grade, currency, spot_price, change_delta)
-    VALUES (%(crawl_date)s, %(section)s, %(port)s, %(fuel_grade)s, %(currency)s, %(spot_price)s, %(change_delta)s)
-    ON CONFLICT (crawl_date, port, fuel_grade)
+    INSERT INTO bunker_prices (crawl_timestamp, section, port, fuel_grade, currency, spot_price, change_delta)
+    VALUES (%(crawl_timestamp)s, %(section)s, %(port)s, %(fuel_grade)s, %(currency)s, %(spot_price)s, %(change_delta)s)
+    ON CONFLICT ON CONSTRAINT uq_bunker_snapshot
     DO UPDATE SET
         spot_price = EXCLUDED.spot_price,
         change_delta = EXCLUDED.change_delta,
@@ -159,5 +159,5 @@ def upsert_to_postgres(records: List[Dict]):
 
 if __name__ == "__main__":
     data = fetch_all_data()
-    unique_data = { (d["crawl_date"], d["port"], d["fuel_grade"]): d for d in data }.values()
+    unique_data = { (d["crawl_timestamp"], d["port"], d["fuel_grade"]): d for d in data }.values()
     upsert_to_postgres(list(unique_data))
